@@ -1,0 +1,12 @@
+[project]
+name = "jarvis"
+version = "1.0.0"
+dependencies = [
+    "flet==0.25.2",
+    "httpx",
+]
+
+[tool.flet]
+org = "com.baller911"
+product = "Jarvis"
+company = "Baller911"
