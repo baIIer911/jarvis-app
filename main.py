@@ -1,185 +1,116 @@
-import flet as ft
-import httpx
-import inspect
+import os
 import json
+import httpx
+import flet as ft
 
-SYSTEM_PROMPT = """Ты — Джарвис, персональный ИИ-помощник на Android в стиле дворецкого Тони Старка.
-Отвечай вежливо, кратко и по делу, называя пользователя «сэр».
-Если пользователь просит выполнить действие на телефоне, верни ТОЛЬКО JSON без лишнего текста:
-{"action": "call", "contact": "Имя"}
-{"action": "message", "app": "max", "contact": "Имя", "text": "текст"}
-{"action": "history", "query": "запрос"}
-{"action": "open_url", "url": "https://..."}
-Если это обычный вопрос или диалог, отвечай обычным текстом."""
-
-ALLOWED_ACTIONS = {"call", "message", "history", "open_url"}
-
-def extract_json(text: str):
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start : i + 1])
-                except json.JSONDecodeError:
-                    return None
-    return None
+SYSTEM_PROMPT = """Ты — Джарвис, персональный ИИ-ассистент на телефоне пользователя. Общайся кратко, вежливо, с лёгкой харизмой и называй пользователя «сэр».
+Если пользователь просит выполнить действие на телефоне, ответь строго в формате JSON (без лишнего текста вокруг):
+1. Позвонить: {"action": "call", "contact": "имя или номер", "reply": "Набираю контакт, сэр."}
+2. Написать сообщение в MAX: {"action": "message", "contact": "имя", "text": "текст сообщения", "reply": "Отправляю сообщение через MAX, сэр."}
+3. Найти в интернете / истории: {"action": "history", "query": "поисковый запрос", "reply": "Ищу информацию, сэр."}
+4. Открыть сайт или YouTube: {"action": "url", "url": "https://...", "reply": "Открываю, сэр."}
+Если это обычный разговор или вопрос — отвечай обычным текстом."""
 
 def main(page: ft.Page):
     page.title = "J.A.R.V.I.S."
     page.theme_mode = ft.ThemeMode.DARK
-    page.bgcolor = "#0B0F19"
-    page.padding = 12
+    page.bgcolor = "#0A0E17"
+    page.padding = 0
 
-    api_key = page.shared_preferences.get("api_key") or ""
-    model_name = page.shared_preferences.get("model_name") or "google/gemini-2.0-flash-exp:free"
-    system_msg = {"role": "system", "content": SYSTEM_PROMPT}
-    history_messages = [system_msg]
+    cfg = json.load(open("settings.json", encoding="utf-8")) if os.path.exists("settings.json") else {}
+    api_key = cfg.get("api_key", "")
+    model_name = cfg.get("model_name", "google/gemini-2.0-flash-exp:free")
+    history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    chat_list = ft.ListView(expand=True, spacing=10, auto_scroll=True)
+    chat_list = ft.ListView(expand=True, spacing=12, padding=16, auto_scroll=True)
+    status_text = ft.Text("Системы в норме • Ожидание команды", size=12, color="#38BDF8")
 
     def add_bubble(text: str, is_user: bool):
-        bubble = ft.Row(
-            [
-                ft.Container(
-                    content=ft.Text(text, color=ft.Colors.WHITE, size=15, selectable=True),
-                    bgcolor="#1E3A8A" if is_user else "#1F2937",
-                    padding=12,
-                    border_radius=14,
-                    width=280,
-                )
-            ],
-            alignment=ft.MainAxisAlignment.END if is_user else ft.MainAxisAlignment.START,
+        chat_list.controls.append(
+            ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Text(text, color="#F8FAFC", size=15, selectable=True),
+                        bgcolor="#1E3A8A" if is_user else "#111827",
+                        border=ft.border.all(1, "#3B82F6" if is_user else "#1F2937"),
+                        border_radius=16,
+                        padding=14,
+                        width=280,
+                    )
+                ],
+                alignment=ft.MainAxisAlignment.END if is_user else ft.MainAxisAlignment.START,
+            )
         )
-        chat_list.controls.append(bubble)
         page.update()
-        return bubble
 
-    def add_typing_indicator():
-        indicator = ft.Row(
-            [
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.ProgressRing(width=16, height=16, stroke_width=2, color="#3B82F6"),
-                            ft.Text("Джарвис думает...", color="#9CA3AF", size=14),
-                        ],
-                        spacing=10,
-                    ),
-                    bgcolor="#1F2937",
-                    padding=12,
-                    border_radius=14,
-                )
-            ],
-            alignment=ft.MainAxisAlignment.START,
-        )
-        chat_list.controls.append(indicator)
-        page.update()
-        return indicator
-
-    async def trigger_macrodroid(action_data: dict) -> str:
-        act = action_data.get("action")
-        if act not in ALLOWED_ACTIONS:
-            return "Сэр, получена неизвестная команда."
-
-        if act == "open_url":
-            url = action_data.get("url", "https://ya.ru")
-            res = page.launch_url(url)
-            if inspect.isawaitable(res):
-                await res
-            return f"Открываю {url}, сэр."
-
-        clean_params = {k: v for k, v in action_data.items() if k != "action"}
+    async def trigger_macrodroid(endpoint: str, params: dict):
         try:
             async with httpx.AsyncClient(timeout=6.0) as client:
-                resp = await client.get(f"http://127.0.0{act}", params=clean_params)
-                if resp.status_code == 200:
-                    return f"Команда «{act}» выполнена через MacroDroid, сэр."
-                return f"MacroDroid ответил кодом {resp.status_code}, сэр."
-        except Exception as e:
-            return f"Не удалось связаться с MacroDroid (порт 8765), сэр: {e}"
+                await client.get(f"http://127.0.0{endpoint}", params=params)
+        except Exception as ex:
+            add_bubble(f"⚠ Связь с MacroDroid: {ex}", False)
 
-    def set_input_locked(locked: bool):
-        input_field.disabled = locked
-        send_button.disabled = locked
-        page.update()
-
-    async def ask_jarvis(user_text: str):
-        nonlocal history_messages
+    async def send_message(e):
+        user_text = msg_input.value.strip()
+        if not user_text:
+            return
         if not api_key:
-            add_bubble("Сэр, сначала укажите ваш ключ OpenRouter в настройках (шестеренка сверху).", False)
+            add_bubble("Сэр, сначала укажите ключ OpenRouter в настройках (⚙️ вверху справа).", False)
             return
 
-        history_messages.append({"role": "user", "content": user_text})
-        if len(history_messages) > 25:
-            history_messages = [system_msg] + history_messages[1:][-24:]
+        msg_input.value = ""
+        add_bubble(user_text, True)
+        status_text.value = "Обработка запроса..."
+        page.update()
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": model_name,
-            "messages": history_messages,
-        }
-
-        set_input_locked(True)
-        typing = add_typing_indicator()
-        reply = None
+        history.append({"role": "user", "content": user_text})
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
+                    "https://openrouter.ai",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"model": model_name, "messages": history[-12:]},
                 )
-                if resp.status_code != 200:
-                    add_bubble(f"Сэр, ошибка сервера {resp.status_code}: {resp.text[:150]}", False)
+                data = resp.json()
+                if "error" in data:
+                    add_bubble(f"Ошибка OpenRouter: {data['error'].get('message', data['error'])}", False)
+                    status_text.value = "Ошибка API"
+                    page.update()
                     return
 
-                data = resp.json()
-                first_choice = next(iter(data.get("choices", [])), {})
-                reply = first_choice.get("message", {}).get("content", "").strip()
-        except Exception as e:
-            add_bubble(f"Ошибка связи с сервером, сэр: {e}", False)
-            return
-        finally:
-            if typing in chat_list.controls:
-                chat_list.controls.remove(typing)
-            set_input_locked(False)
+                raw_reply = data["choices"][0]["message"]["content"].strip()
+                history.append({"role": "assistant", "content": raw_reply})
 
-        if not reply:
-            add_bubble("Сэр, модель вернула пустой ответ.", False)
-            return
+                clean_json = raw_reply.replace("```json", "").replace("```", "").strip()
+                if clean_json.startswith("{") and clean_json.endswith("}"):
+                    cmd = json.loads(clean_json)
+                    action = cmd.get("action")
+                    reply = cmd.get("reply", "Выполняю, сэр.")
+                    add_bubble(reply, False)
 
-        cmd_data = extract_json(reply)
-        if isinstance(cmd_data, dict) and "action" in cmd_data:
-            status_text = await trigger_macrodroid(cmd_data)
-            history_messages.append({"role": "assistant", "content": reply})
-            add_bubble(status_text, False)
-            return
+                    if action == "call":
+                        await trigger_macrodroid("call", {"contact": cmd.get("contact", "")})
+                    elif action == "message":
+                        await trigger_macrodroid(
+                            "message",
+                            {"contact": cmd.get("contact", ""), "text": cmd.get("text", "")},
+                        )
+                    elif action == "history":
+                        await trigger_macrodroid("history", {"query": cmd.get("query", "")})
+                    elif action == "url":
+                        page.launch_url(cmd.get("url", "https://yandex.ru"))
+                else:
+                    add_bubble(raw_reply, False)
 
-        history_messages.append({"role": "assistant", "content": reply})
-        add_bubble(reply, False)
+        except Exception as ex:
+            add_bubble(f"Сбой связи с сервером, сэр: {ex}", False)
 
-    def on_send(e):
-        text = input_field.value.strip()
-        if not text or input_field.disabled:
-            return
-        input_field.value = ""
-        add_bubble(text, True)
-        page.run_task(ask_jarvis, text)
+        status_text.value = "Системы в норме • Ожидание команды"
+        page.update()
 
     def open_settings(e):
         key_input = ft.TextField(
@@ -194,8 +125,8 @@ def main(page: ft.Page):
             nonlocal api_key, model_name
             api_key = key_input.value.strip()
             model_name = model_input.value.strip()
-            page.shared_preferences.set("api_key", api_key)
-            page.shared_preferences.set("model_name", model_name)
+            with open("settings.json", "w", encoding="utf-8") as f:
+                json.dump({"api_key": api_key, "model_name": model_name}, f)
             page.pop_dialog()
             add_bubble("Настройки сохранены, сэр. Я готов к работе.", False)
 
@@ -206,27 +137,53 @@ def main(page: ft.Page):
         )
         page.show_dialog(dlg)
 
-    input_field = ft.TextField(
-        hint_text="Напишите Джарвису...",
+    msg_input = ft.TextField(
+        hint_text="Введите команду или вопрос...",
         expand=True,
         border_radius=20,
-        filled=True,
-        fill_color="#1F2937",
-        on_submit=on_send,
-    )
-    send_button = ft.IconButton(ft.Icons.SEND, icon_color="#3B82F6", on_click=on_send)
-
-    page.appbar = ft.AppBar(
-        title=ft.Text("J.A.R.V.I.S.", weight=ft.FontWeight.BOLD),
         bgcolor="#111827",
-        actions=[ft.IconButton(ft.Icons.SETTINGS, on_click=open_settings)],
+        border_color="#1E3A8A",
+        color="#F8FAFC",
+        on_submit=send_message,
     )
 
-    add_bubble("Системы запущены, сэр. Нажмите на шестеренку сверху, чтобы ввести ключ OpenRouter.", False)
-
-    page.add(
-        chat_list,
-        ft.Row([input_field, send_button]),
+    header = ft.Container(
+        content=ft.Row(
+            [
+                ft.Column(
+                    [
+                        ft.Text("J.A.R.V.I.S.", size=20, weight=ft.FontWeight.BOLD, color="#38BDF8"),
+                        status_text,
+                    ],
+                    spacing=2,
+                ),
+                ft.IconButton(icon=ft.Icons.SETTINGS, icon_color="#38BDF8", on_click=open_settings),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        ),
+        padding=ft.padding.only(left=16, right=12, top=42, bottom=12),
+        bgcolor="#0F172A",
+        border=ft.border.only(bottom=ft.BorderSide(1, "#1E293B")),
     )
+
+    input_bar = ft.Container(
+        content=ft.Row(
+            [
+                msg_input,
+                ft.IconButton(
+                    icon=ft.Icons.SEND_ROUNDED,
+                    icon_color="#0A0E17",
+                    bgcolor="#38BDF8",
+                    on_click=send_message,
+                ),
+            ],
+            spacing=8,
+        ),
+        padding=ft.padding.only(left=12, right=12, top=8, bottom=16),
+        bgcolor="#0F172A",
+    )
+
+    page.add(ft.Column([header, chat_list, input_bar], expand=True, spacing=0))
+    add_bubble("Добро пожаловать, сэр. Все системы Джарвиса готовы к работе.", False)
 
 ft.run(main)
