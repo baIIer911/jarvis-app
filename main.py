@@ -32,7 +32,6 @@ def main(page: ft.Page):
                     ft.Container(
                         content=ft.Text(text, color="#F8FAFC", size=15, selectable=True),
                         bgcolor="#1E3A8A" if is_user else "#111827",
-                        border=ft.border.all(1, "#3B82F6" if is_user else "#1F2937"),
                         border_radius=16,
                         padding=14,
                         width=280,
@@ -102,7 +101,7 @@ def main(page: ft.Page):
                     elif action == "history":
                         await trigger_macrodroid("history", {"query": cmd.get("query", "")})
                     elif action == "url":
-                        page.launch_url(cmd.get("url", "https://yandex.ru"))
+                        await page.launch_url(cmd.get("url", "https://yandex.ru"))
                 else:
                     add_bubble(raw_reply, False)
 
@@ -161,9 +160,8 @@ def main(page: ft.Page):
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         ),
-        padding=ft.padding.only(left=16, right=12, top=42, bottom=12),
+        padding=16,
         bgcolor="#0F172A",
-        border=ft.border.only(bottom=ft.BorderSide(1, "#1E293B")),
     )
 
     input_bar = ft.Container(
@@ -179,7 +177,7 @@ def main(page: ft.Page):
             ],
             spacing=8,
         ),
-        padding=ft.padding.only(left=12, right=12, top=8, bottom=16),
+        padding=12,
         bgcolor="#0F172A",
     )
 
