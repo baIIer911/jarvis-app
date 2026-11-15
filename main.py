@@ -194,9 +194,9 @@ def main(page: ft.Page):
             nonlocal api_key, model_name
             api_key = key_input.value.strip()
             model_name = model_input.value.strip()
-            page.client_storage.set("api_key", api_key)
-            page.client_storage.set("model_name", model_name)
-            page.close(dlg)
+            page.shared_preferences.set("api_key", api_key)
+            page.shared_preferences.set("model_name", model_name)
+            page.pop_dialog()
             add_bubble("Настройки сохранены, сэр. Я готов к работе.", False)
 
         dlg = ft.AlertDialog(
@@ -204,7 +204,7 @@ def main(page: ft.Page):
             content=ft.Column([key_input, model_input], tight=True),
             actions=[ft.TextButton("Сохранить", on_click=save_settings)],
         )
-        page.open(dlg)
+        page.show_dialog(dlg)
 
     input_field = ft.TextField(
         hint_text="Напишите Джарвису...",
@@ -229,4 +229,4 @@ def main(page: ft.Page):
         ft.Row([input_field, send_button]),
     )
 
-ft.app(target=main)
+ft.run(main)
