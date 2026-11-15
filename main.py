@@ -41,8 +41,8 @@ def main(page: ft.Page):
     page.bgcolor = "#0B0F19"
     page.padding = 12
 
-    api_key = page.client_storage.get("api_key") or ""
-    model_name = page.client_storage.get("model_name") or "google/gemini-2.0-flash-exp:free"
+    api_key = page.shared_preferences.get("api_key") or ""
+    model_name = page.shared_preferences.get("model_name") or "google/gemini-2.0-flash-exp:free"
     system_msg = {"role": "system", "content": SYSTEM_PROMPT}
     history_messages = [system_msg]
 
