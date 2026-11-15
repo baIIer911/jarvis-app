@@ -7,9 +7,19 @@ SYSTEM_PROMPT = """Ты — Джарвис, персональный ИИ-асс
 Если пользователь просит выполнить действие на телефоне, ответь строго в формате JSON (без лишнего текста вокруг):
 1. Позвонить: {"action": "call", "contact": "имя или номер", "reply": "Набираю контакт, сэр."}
 2. Написать сообщение в MAX: {"action": "message", "contact": "имя", "text": "текст сообщения", "reply": "Отправляю сообщение через MAX, сэр."}
-3. Найти в интернете / истории: {"action": "history", "query": "поисковый запрос", "reply": "Ищу информацию, сэр."}
-4. Открыть сайт или YouTube: {"action": "url", "url": "https://...", "reply": "Открываю, сэр."}
+3. Написать сообщение в Telegram: {"action": "telegram", "contact": "имя", "text": "текст сообщения", "reply": "Отправляю сообщение в Telegram, сэр."}
+4. Включить или выключить VPN: {"action": "vpn", "reply": "Переключаю VPN, сэр."}
+5. Включить или выключить фонарик: {"action": "flashlight", "reply": "Переключаю фонарик, сэр."}
+6. Найти в интернете: {"action": "history", "query": "поисковый запрос", "reply": "Ищу информацию, сэр."}
+7. Открыть сайт, Яндекс, Гугл или YouTube: {"action": "url", "url": "https://...", "reply": "Открываю, сэр."}
 Если это обычный разговор или вопрос — отвечай обычным текстом."""
+
+FALLBACK_MODELS = [
+    "openrouter/free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-3-27b-it:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+]
 
 def main(page: ft.Page):
     page.title = "J.A.R.V.I.S."
@@ -19,7 +29,7 @@ def main(page: ft.Page):
 
     cfg = json.load(open("settings.json", encoding="utf-8")) if os.path.exists("settings.json") else {}
     api_key = cfg.get("api_key", "")
-    model_name = cfg.get("model_name", "google/gemini-2.0-flash-exp:free")
+    model_name = cfg.get("model_name", "openrouter/free")
     history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     chat_list = ft.ListView(expand=True, spacing=12, padding=16, auto_scroll=True)
@@ -64,49 +74,79 @@ def main(page: ft.Page):
 
         history.append({"role": "user", "content": user_text})
 
+        models_to_try = [model_name] + [m for m in FALLBACK_MODELS if m != model_name]
+        raw_reply = ""
+        last_error = "Неизвестная ошибка сети"
+
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    "https://openrouter.ai",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"model": model_name, "messages": history[-12:]},
-                )
-                data = resp.json()
-                if "error" in data:
-                    add_bubble(f"Ошибка OpenRouter: {data['error'].get('message', data['error'])}", False)
-                    status_text.value = "Ошибка API"
-                    page.update()
-                    return
+            async with httpx.AsyncClient(timeout=25.0, verify=False, follow_redirects=True) as client:
+                for m in models_to_try:
+                    resp = await client.post(
+                        "https://openrouter.ai",
+                        headers={
+                            "Authorization": f"Bearer {api_key.strip()}",
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": "https://github.com",
+                            "X-Title": "Jarvis Assistant",
+                            "User-Agent": "JarvisAndroid/1.0",
+                        },
+                        json={"model": m, "messages": history[-12:]},
+                    )
+                    if resp.status_code != 200 or not resp.text.strip():
+                        last_error = f"Код {resp.status_code} ({m}): {resp.text[:120]}"
+                        continue
 
-                raw_reply = data["choices"][0]["message"]["content"].strip()
-                history.append({"role": "assistant", "content": raw_reply})
+                    data = resp.json()
+                    if "error" in data:
+                        last_error = str(data["error"].get("message", data["error"]))
+                        continue
 
-                clean_json = raw_reply.replace("```json", "").replace("```", "").strip()
-                if clean_json.startswith("{") and clean_json.endswith("}"):
-                    cmd = json.loads(clean_json)
-                    action = cmd.get("action")
-                    reply = cmd.get("reply", "Выполняю, сэр.")
-                    add_bubble(reply, False)
+                    choices = data.get("choices", [])
+                    content = choices.get("message", {}).get("content", "").strip() if choices else ""
+                    if content:
+                        raw_reply = content
+                        break
 
-                    if action == "call":
-                        await trigger_macrodroid("call", {"contact": cmd.get("contact", "")})
-                    elif action == "message":
-                        await trigger_macrodroid(
-                            "message",
-                            {"contact": cmd.get("contact", ""), "text": cmd.get("text", "")},
-                        )
-                    elif action == "history":
-                        await trigger_macrodroid("history", {"query": cmd.get("query", "")})
-                    elif action == "url":
-                        await page.launch_url(cmd.get("url", "https://yandex.ru"))
-                else:
-                    add_bubble(raw_reply, False)
+            if not raw_reply:
+                add_bubble(f"Сбой OpenRouter, сэр: {last_error}", False)
+                status_text.value = "Ошибка API"
+                page.update()
+                return
+
+            history.append({"role": "assistant", "content": raw_reply})
+
+            clean_json = raw_reply.replace("```json", "").replace("```", "").strip()
+            if clean_json.startswith("{") and clean_json.endswith("}"):
+                cmd = json.loads(clean_json)
+                action = cmd.get("action")
+                reply = cmd.get("reply", "Выполняю, сэр.")
+                add_bubble(reply, False)
+
+                if action == "call":
+                    await trigger_macrodroid("call", {"contact": cmd.get("contact", "")})
+                elif action == "message":
+                    await trigger_macrodroid(
+                        "message",
+                        {"contact": cmd.get("contact", ""), "text": cmd.get("text", "")},
+                    )
+                elif action == "telegram":
+                    await trigger_macrodroid(
+                        "telegram",
+                        {"contact": cmd.get("contact", ""), "text": cmd.get("text", "")},
+                    )
+                elif action == "vpn":
+                    await trigger_macrodroid("vpn", {})
+                elif action == "flashlight":
+                    await trigger_macrodroid("flashlight", {})
+                elif action == "history":
+                    await trigger_macrodroid("history", {"query": cmd.get("query", "")})
+                elif action == "url":
+                    await page.launch_url(cmd.get("url", "https://yandex.ru"))
+            else:
+                add_bubble(raw_reply, False)
 
         except Exception as ex:
-            add_bubble(f"Сбой связи с сервером, сэр: {ex}", False)
+            add_bubble(f"Сбой связи с сервером, сэр: {type(ex).__name__}: {ex}", False)
 
         status_text.value = "Системы в норме • Ожидание команды"
         page.update()
@@ -123,7 +163,7 @@ def main(page: ft.Page):
         def save_settings(ev):
             nonlocal api_key, model_name
             api_key = key_input.value.strip()
-            model_name = model_input.value.strip()
+            model_name = model_input.value.strip() or "openrouter/free"
             with open("settings.json", "w", encoding="utf-8") as f:
                 json.dump({"api_key": api_key, "model_name": model_name}, f)
             page.pop_dialog()
